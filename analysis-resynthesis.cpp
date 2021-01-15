@@ -65,6 +65,8 @@ struct Phasor {
   void frequency(double hz) {  //
     increment = hz / SAMPLE_RATE;
   }
+  // c++ operator overloading
+  // + - * / ()  ... , >> new
   double operator()() {
     double value = phase;
     phase += increment;
@@ -102,7 +104,14 @@ struct MyApp : App {
   int N{16};  // the number of sine oscillators to use
 
   std::vector<Sine> sine;
-  std::vector<std::vector<Entry>> data;
+  std::vector<std::vector<Entry>> data;  // Matrix
+  // data[i][j]
+  // data[i] // the ith "frame" contains a set of peaks (frequency/amplitude
+  // pair)
+  //
+  // data[a] and data[b] (next frame)
+  //       data[t] (a linear interpolation of frames a and b
+  //
 
   MyApp(int argc, char *argv[]) {
     // C++ "constructor" called when MyApp is declared
