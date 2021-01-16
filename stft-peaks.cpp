@@ -17,18 +17,98 @@
 // -- Karl Yerkes / 2021-01-12 / MAT240B
 //
 
-#include <algorithm>  // std::sort
+#include <algorithm>  // std::sort, std::min
+#include <complex>
+#include <iostream>
+#include <valarray>
 #include <vector>
 
-int main(int argc, char *argv[]) {
+const double PI = 3.141592653589793238460;
+const double SAMPLERATE = 48000.0;
+
+typedef std::complex<double> Complex;
+typedef std::valarray<Complex> CArray;
+
+// Cooley–Tukey FFT (in-place, divide-and-conquer)
+// Higher memory requirements and redundancy although more intuitive
+void fft(CArray& x) {
+  const size_t N = x.size();
+  if (N <= 1) return;
+
+  // divide
+  CArray even = x[std::slice(0, N / 2, 2)];
+  CArray odd = x[std::slice(1, N / 2, 2)];
+
+  // conquer
+  fft(even);
+  fft(odd);
+
+  // combine
+  for (size_t k = 0; k < N / 2; ++k) {
+    Complex t = std::polar(1.0, -2 * PI * k / N) * odd[k];
+    x[k] = even[k] + t;
+    x[k + N / 2] = even[k] - t;
+  }
+}
+
+struct Peak {
+  double magnitude, frequency;
+};
+
+int main(int argc, char* argv[]) {
+  // take N from the command line
+  unsigned long N = 16;
+  if (argc > 1) {
+    N = std::stoi(argv[1]);
+  }
+
   // take the data in
   //
-  vector<double> data;
+  std::vector<double> input;
   double value;
-  int n = 0;
   while (std::cin >> value) {
-    data[n] = value;
-    n++;
+    input.push_back(value);
+  }
+
+  int clipSize = 2048;
+  int hopSize = 1024;
+  int fftSize = 8192;
+
+  for (int n = 0; n < input.size() - clipSize; n += hopSize) {
+    std::vector<double> clip(clipSize, 0.0);
+    for (int i = 0; i < clip.size(); i++) {
+      // windowed copy
+      clip[i] = input[n + i] * (1 - cos(2 * PI * i / clip.size())) / 2;
+    }
+
+    CArray data;
+    data.resize(fftSize);
+    for (int i = 0; i < clip.size(); i++) {
+      data[i] = clip[i];
+    }
+    for (int i = clip.size(); i < fftSize; i++) {
+      data[i] = 0.0;
+    }
+
+    fft(data);
+
+    std::vector<Peak> peak;
+    for (int i = 1; i < data.size() / 2; i++) {
+      if (abs(data[i - 1]) < abs(data[i]))
+        if (abs(data[i + 1]) < abs(data[i]))
+          peak.push_back(
+              {abs(data[i]) / (clip.size() / 2), SAMPLERATE * i / data.size()});
+    }
+
+    std::sort(peak.begin(), peak.end(), [](Peak const& a, Peak const& b) {
+      return a.magnitude > b.magnitude;
+    });
+
+    int M = std::min(N, peak.size()) - 1;
+    for (int i = 0; i < M; i++) {
+      printf("%lf/%lf, ", peak[i].magnitude, peak[i].frequency);
+    }
+    printf("%lf/%lf\n", peak[M].magnitude, peak[M].frequency);
   }
 
   // put your code here!
