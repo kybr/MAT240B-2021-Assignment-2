@@ -36,6 +36,8 @@ typedef std::valarray<Complex> CArray;
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+double dbtoa(double db) { return pow(10.0, db / 20.0); }
+
 // Cooley–Tukey FFT (in-place, divide-and-conquer)
 // Higher memory requirements and redundancy although more intuitive
 void fft(CArray &x) {
@@ -138,6 +140,7 @@ using namespace al;
 
 struct MyApp : App {
   Parameter background{"background", "", 0.0, "", 0.0f, 1.0f};
+  Parameter db{"db", "", -60.0, "", -60.0f, 0.0f};
   Parameter t{"t", "", 0.0, "", 0.0f, 1.0f};
   ControlGUI gui;
 
@@ -244,12 +247,6 @@ struct MyApp : App {
     }
 
     sine.resize(N);
-
-    // remove this code later. it's just here to test
-    for (int n = 0; n < N; n++) {
-      sine[n].frequency(data[data.size() / 2][n].frequency);
-      sine[n].amplitude = data[data.size() / 2][n].magnitude;
-    }
   }
 
   void onCreate() override {
@@ -259,6 +256,7 @@ struct MyApp : App {
     nav().pos(Vec3d(0, 0, 8));  // Set the camera to view the scene
 
     gui << background;
+    gui << db;
     gui << t;
     gui.init();
 
@@ -301,6 +299,12 @@ struct MyApp : App {
     // - use linear interpolation
     //
 
+    int frame = t * data.size();
+    for (int n = 0; n < N; n++) {
+      sine[n].frequency(data[frame][n].frequency);
+      sine[n].amplitude = data[frame][n].magnitude;
+    }
+
     while (io()) {
       float i = io.in(0);  // left/mono channel input (if any);
 
@@ -308,9 +312,11 @@ struct MyApp : App {
       //
       float f = 0;
       for (int n = 0; n < N; n++) {
-        f += sine[n]();  // XXX update this line to effect amplitude
+        f += sine[n]() * sine[n].amplitude;
       }
-      f /= N;  // reduce the amplitude of the result
+      // f /= N;  // reduce the amplitude of the result
+
+      f *= dbtoa(db.get());
 
       io.out(0) = f;
       io.out(1) = f;
