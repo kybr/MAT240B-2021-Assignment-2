@@ -23,6 +23,9 @@
 #include "al/ui/al_ControlGUI.hpp"
 #include "al/ui/al_Parameter.hpp"
 
+#define DR_WAV_IMPLEMENTATION
+#include "dr_wav.h"
+
 const double PI = 3.141592653589793238460;
 const double SAMPLERATE = 48000.0;
 
@@ -162,16 +165,39 @@ struct MyApp : App {
     //   + the number of oscillators N
     // - adapt code from wav-read.cpp
 
-    if (argc > 1) {
-      N = std::stoi(argv[1]);
+    if (argc < 2) {
+      printf("read <.wav> # open and dump from a .wav file");
+      exit(1);
     }
 
     // take the data in
     //
     std::vector<double> input;
-    double value;
-    while (std::cin >> value) {
-      input.push_back(value);
+
+    drwav *pWav = drwav_open_file(argv[1]);
+    if (pWav == nullptr) {
+      exit(-1);
+    }
+
+    float *pSampleData = (float *)malloc((size_t)pWav->totalPCMFrameCount *
+                                         pWav->channels * sizeof(float));
+    drwav_read_f32(pWav, pWav->totalPCMFrameCount, pSampleData);
+
+    drwav_close(pWav);
+
+    if (pWav->channels == 1)
+      for (unsigned i = 0; i < pWav->totalPCMFrameCount; ++i)
+        input.push_back(pSampleData[i]);
+    else if (pWav->channels == 2) {
+      for (unsigned i = 0; i < pWav->totalPCMFrameCount; ++i)
+        input.push_back((pSampleData[2 * i] + pSampleData[2 * i + 1]) / 2);
+    } else {
+      printf("can't handle %d channels\n", pWav->channels);
+      exit(1);
+    }
+
+    if (argc > 2) {
+      N = std::stoi(argv[1]);
     }
 
     int clipSize = 2048;
