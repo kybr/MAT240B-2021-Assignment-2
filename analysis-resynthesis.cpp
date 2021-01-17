@@ -12,16 +12,52 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include <algorithm>  // std::sort
+#include <algorithm>  // std::sort, std::min
 #include <cmath>      // ::sin()
+#include <complex>
 #include <iostream>
+#include <valarray>
 #include <vector>
 
 #include "al/app/al_App.hpp"
 #include "al/ui/al_ControlGUI.hpp"
 #include "al/ui/al_Parameter.hpp"
 
-// define free functions (functions not associated with any class) here
-//
+const double PI = 3.141592653589793238460;
+const double SAMPLERATE = 48000.0;
+
+typedef std::complex<double> Complex;
+typedef std::valarray<Complex> CArray;
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+// Cooley–Tukey FFT (in-place, divide-and-conquer)
+// Higher memory requirements and redundancy although more intuitive
+void fft(CArray &x) {
+  const size_t N = x.size();
+  if (N <= 1) return;
+
+  // divide
+  CArray even = x[std::slice(0, N / 2, 2)];
+  CArray odd = x[std::slice(1, N / 2, 2)];
+
+  // conquer
+  fft(even);
+  fft(odd);
+
+  // combine
+  for (size_t k = 0; k < N / 2; ++k) {
+    Complex t = std::polar(1.0, -2 * PI * k / N) * odd[k];
+    x[k] = even[k] + t;
+    x[k + N / 2] = even[k] - t;
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 
 // a class that encapsulates data approximating one cycle of a sine wave
 //
@@ -79,6 +115,7 @@ struct Phasor {
 // a class that may be used as a Sine oscillator
 //
 struct Sine : Phasor {
+  double amplitude{0};
   double operator()() {  //
     return sine(Phasor::operator()());
   }
@@ -86,8 +123,8 @@ struct Sine : Phasor {
 
 // suggested entry in a table of data resulting from the analysis of the input
 // sound.
-struct Entry {
-  double frequency, amplitude;
+struct Peak {
+  double magnitude, frequency;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -101,10 +138,10 @@ struct MyApp : App {
   Parameter t{"t", "", 0.0, "", 0.0f, 1.0f};
   ControlGUI gui;
 
-  int N{16};  // the number of sine oscillators to use
+  int N{16};
 
   std::vector<Sine> sine;
-  std::vector<std::vector<Entry>> data;  // Matrix
+  std::vector<std::vector<Peak>> data;  // Matrix
   // data[i][j]
   // data[i] // the ith "frame" contains a set of peaks (frequency/amplitude
   // pair)
@@ -119,22 +156,73 @@ struct MyApp : App {
 
     // XXX Analysis!
     // - reuse your STFT peaks analysis code here
-    // - fill the data structure (i.e., std::vector<std::vector<Entry>> data)
+    // - fill the data structure (i.e., std::vector<std::vector<Peak>> data)
     // - accept and process command line arguments here
     //   + the name of a .wav file
     //   + the number of oscillators N
     // - adapt code from wav-read.cpp
-  }
 
-  void onInit() override {
-    // called a single time just after the app is started
+    if (argc > 1) {
+      N = std::stoi(argv[1]);
+    }
+
+    // take the data in
     //
+    std::vector<double> input;
+    double value;
+    while (std::cin >> value) {
+      input.push_back(value);
+    }
+
+    int clipSize = 2048;
+    int hopSize = 1024;
+    int fftSize = 8192;
+
+    for (int n = 0; n < input.size() - clipSize; n += hopSize) {
+      std::vector<double> clip(clipSize, 0.0);
+      for (int i = 0; i < clip.size(); i++) {
+        // windowed copy
+        clip[i] = input[n + i] * (1 - cos(2 * PI * i / clip.size())) / 2;
+      }
+
+      CArray data;
+      data.resize(fftSize);
+      for (int i = 0; i < clip.size(); i++) {
+        data[i] = clip[i];
+      }
+      for (int i = clip.size(); i < fftSize; i++) {
+        data[i] = 0.0;
+      }
+
+      fft(data);
+
+      std::vector<Peak> peak;
+      for (int i = 1; i < data.size() / 2; i++) {
+        if (abs(data[i - 1]) < abs(data[i]))
+          if (abs(data[i + 1]) < abs(data[i]))
+            peak.push_back({abs(data[i]) / (clip.size() / 2),
+                            SAMPLERATE * i / data.size()});
+      }
+
+      std::sort(peak.begin(), peak.end(), [](Peak const &a, Peak const &b) {
+        return a.magnitude > b.magnitude;
+      });
+
+      // XXX what to do if the number of peaks is less than N?
+      // unlikely for any complex input, but totally possible for pathological
+      // cases such as silence or step or a singal click
+      //
+
+      peak.resize(N);  // throw away the extras
+      this->data.emplace_back(peak);
+    }
 
     sine.resize(N);
 
     // remove this code later. it's just here to test
     for (int n = 0; n < N; n++) {
-      sine[n].frequency(220.0 * (1 + n));
+      sine[n].frequency(data[data.size() / 2][n].frequency);
+      sine[n].amplitude = data[data.size() / 2][n].magnitude;
     }
   }
 
@@ -180,7 +268,7 @@ struct MyApp : App {
 
     // XXX Resynthesis!
     // - add code here
-    // - use data from the std::vector<std::vector<Entry>> to adjust the
+    // - use data from the std::vector<std::vector<Peak>> to adjust the
     // frequency of the N oscillators
     // - use the value of the t parameter to determine which part of the sound
     // to resynthesize
@@ -220,8 +308,8 @@ int main(int argc, char *argv[]) {
 
   app.configureAudio(48000, 512, 2, 1);
 
-  // Start the AlloLib framework's "app" construct. This blocks until the app is
-  // quit (or it crashes).
+  // Start the AlloLib framework's "app" construct. This blocks until the app
+  // is quit (or it crashes).
   app.start();
 
   return 0;
