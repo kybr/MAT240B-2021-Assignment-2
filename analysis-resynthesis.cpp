@@ -27,7 +27,6 @@
 #include "dr_wav.h"
 
 const double PI = 3.141592653589793238460;
-const double SAMPLERATE = 48000.0;
 
 typedef std::complex<double> Complex;
 typedef std::valarray<Complex> CArray;
@@ -86,7 +85,7 @@ double sine(double p) {
   int a = p * n;
   int b = 1 + a;
   double t = p * n - a;
-  if (b > n)  //
+  if (b >= n)  //
     b = 0;
   // linear interpolation
   return (1 - t) * table.data[a] + t * table.data[b];
@@ -94,6 +93,7 @@ double sine(double p) {
 
 // a constant global "variable" as an alternative to a pre-processor definition
 const double SAMPLE_RATE = 48000.0;
+const unsigned BLOCK_SIZE = 512;
 //#define SAMPLE_RATE (48000.0)  // pre-processor definition
 
 // a class using the operator/functor pattern for audio synthesis/processing. a
@@ -111,7 +111,7 @@ struct Phasor {
   double operator()() {
     double value = phase;
     phase += increment;
-    if (phase > 1)  //
+    if (phase >= 1.0)  //
       phase -= 1;
     return value;
   }
@@ -127,7 +127,7 @@ struct Sine : Phasor {
 };
 
 // suggested entry in a table of data resulting from the analysis of the input
-// sound.
+// sound. renamed Peak; was named Entry.
 struct Peak {
   double magnitude, frequency;
 };
@@ -157,9 +157,6 @@ struct MyApp : App {
   //
 
   MyApp(int argc, char *argv[]) {
-    // C++ "constructor" called when MyApp is declared
-    //
-
     // XXX Analysis!
     // - reuse your STFT peaks analysis code here
     // - fill the data structure (i.e., std::vector<std::vector<Peak>> data)
@@ -173,8 +170,6 @@ struct MyApp : App {
       exit(1);
     }
 
-    // take the data in
-    //
     std::vector<double> input;
 
     drwav *pWav = drwav_open_file(argv[1]);
@@ -200,7 +195,7 @@ struct MyApp : App {
     }
 
     if (argc > 2) {
-      N = std::stoi(argv[1]);
+      N = std::stoi(argv[2]);
     }
 
     int clipSize = 2048;
@@ -210,7 +205,7 @@ struct MyApp : App {
     for (int n = 0; n < input.size() - clipSize; n += hopSize) {
       std::vector<double> clip(clipSize, 0.0);
       for (int i = 0; i < clip.size(); i++) {
-        // windowed copy
+        //          input      *       Hann window
         clip[i] = input[n + i] * (1 - cos(2 * PI * i / clip.size())) / 2;
       }
 
@@ -225,12 +220,25 @@ struct MyApp : App {
 
       fft(data);
 
+      // XXX this is where we might smooth the spectrum
+      // - use a low-pass filter to smooth out the noise
+      //
+
       std::vector<Peak> peak;
       for (int i = 1; i < data.size() / 2; i++) {
+        // XXX this is where we might filter out maxima
+        // - use a threshold value; is the maxima much greater than the noise
+        // floor?
+        // - use a "width"; is the maxima the largest within an M-sample window?
+        //   + but what should be the value of M?
+        //
+
+        // only accept maxima
+        //
         if (abs(data[i - 1]) < abs(data[i]))
           if (abs(data[i + 1]) < abs(data[i]))
             peak.push_back({abs(data[i]) / (clip.size() / 2),
-                            SAMPLERATE * i / data.size()});
+                            SAMPLE_RATE * i / data.size()});
       }
 
       std::sort(peak.begin(), peak.end(), [](Peak const &a, Peak const &b) {
@@ -238,11 +246,18 @@ struct MyApp : App {
       });
 
       // XXX what to do if the number of peaks is less than N?
-      // unlikely for any complex input, but totally possible for pathological
-      // cases such as silence or step or a singal click
+      // unlikely for any sophisticated input, but totally possible for
+      // pathological cases such as silence or step or a singal click
       //
 
       peak.resize(N);  // throw away the extras
+
+      if (0) {
+        std::sort(peak.begin(), peak.end(), [](Peak const &a, Peak const &b) {
+          return a.frequency > b.frequency;
+        });
+      }
+
       this->data.emplace_back(peak);
     }
 
@@ -250,46 +265,23 @@ struct MyApp : App {
   }
 
   void onCreate() override {
-    // called a single time (in a graphics context) before onAnimate or onDraw
-    //
-
-    nav().pos(Vec3d(0, 0, 8));  // Set the camera to view the scene
-
     gui << background;
     gui << db;
     gui << t;
     gui.init();
-
-    // Disable nav control; So default keyboard and mouse control is disabled
     navControl().active(false);
   }
 
   void onAnimate(double dt) override {
-    // called over and over just before onDraw
-    t.set(t.get() + dt * 0.03);
-    if (t > 1) {
-      t.set(t.get() - 1);
-    }
+    //
   }
 
   void onDraw(Graphics &g) override {
-    // called over and over, once per view, per frame. warning! this may be
-    // called more than once per frame. for instance, in the context of 3D
-    // stereo viewing, this will be called twice per frame. if 6 screens are
-    // attached to this system, then onDraw will be called 6 times per frame.
-    //
     g.clear(background);
-    //
-    //
-
-    // Draw th GUI
     gui.draw(g);
   }
 
   void onSound(AudioIOData &io) override {
-    // called over and over, once per audio block
-    //
-
     // XXX Resynthesis!
     // - add code here
     // - use data from the std::vector<std::vector<Peak>> to adjust the
@@ -299,11 +291,35 @@ struct MyApp : App {
     // - use linear interpolation
     //
 
-    int frame = t * data.size();
-    for (int n = 0; n < N; n++) {
-      sine[n].frequency(data[frame][n].frequency);
-      sine[n].amplitude = data[frame][n].magnitude;
+    double tmp = t.get();
+    tmp += 127.0 / 48000.0;
+    if (tmp >= 1.0) {
+      tmp -= 1.0;
     }
+    t.set(tmp);
+
+    double p = tmp * data.size();
+    int a = p;
+    int b = 1 + a;
+    if (b >= data.size())  //
+      b = 0;
+    p -= a;
+
+    for (int i = 0; i < N; i++) {
+      double frequency =
+          (1 - p) * data[a][i].frequency + p * data[b][i].frequency;
+      double magnitude =
+          (1 - p) * data[a][i].magnitude + p * data[b][i].magnitude;
+
+      sine[i].frequency(frequency);
+      sine[i].amplitude = magnitude;
+    }
+
+    // XXX the code above changes frequency and amplitude immediately based on
+    // the "current" value of t. this might lead to sudden jumps in frequency or
+    // amplitude with might be audible. instead, we might smooth these jumps,
+    // passing these "control" signals through some processor such as Line or
+    // OnePole.
 
     while (io()) {
       float i = io.in(0);  // left/mono channel input (if any);
@@ -322,27 +338,11 @@ struct MyApp : App {
       io.out(1) = f;
     }
   }
-
-  bool onKeyDown(const Keyboard &k) override {
-    int midiNote = asciiToMIDI(k.key());
-    return true;
-  }
-
-  bool onKeyUp(const Keyboard &k) override {
-    int midiNote = asciiToMIDI(k.key());
-    return true;
-  }
 };
 
 int main(int argc, char *argv[]) {
-  // MyApp constructor called here, given arguments from the command line
   MyApp app(argc, argv);
-
-  app.configureAudio(48000, 512, 2, 1);
-
-  // Start the AlloLib framework's "app" construct. This blocks until the app
-  // is quit (or it crashes).
+  app.configureAudio(SAMPLE_RATE, BLOCK_SIZE, 2, 1);
   app.start();
-
   return 0;
 }
