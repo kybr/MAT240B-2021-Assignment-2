@@ -166,7 +166,7 @@ struct MyApp : App {
     // - adapt code from wav-read.cpp
 
     if (argc < 2) {
-      printf("read <.wav> # open and dump from a .wav file");
+      printf("analysis-resynthesis <.wav> [N oscillators]");
       exit(1);
     }
 
@@ -184,10 +184,10 @@ struct MyApp : App {
     drwav_close(pWav);
 
     if (pWav->channels == 1)
-      for (unsigned i = 0; i < pWav->totalPCMFrameCount; ++i)
-        input.push_back(pSampleData[i]);
+      for (int i = 0; i < pWav->totalPCMFrameCount; i++)
+        input.push_back(pSampleData[i]);  // XXX intermittent crash here !??
     else if (pWav->channels == 2) {
-      for (unsigned i = 0; i < pWav->totalPCMFrameCount; ++i)
+      for (int i = 0; i < pWav->totalPCMFrameCount; i++)
         input.push_back((pSampleData[2 * i] + pSampleData[2 * i + 1]) / 2);
     } else {
       printf("can't handle %d channels\n", pWav->channels);
@@ -254,7 +254,7 @@ struct MyApp : App {
 
       if (0) {
         std::sort(peak.begin(), peak.end(), [](Peak const &a, Peak const &b) {
-          return a.frequency > b.frequency;
+          return a.frequency < b.frequency;
         });
       }
 
@@ -291,30 +291,6 @@ struct MyApp : App {
     // - use linear interpolation
     //
 
-    double tmp = t.get();
-    tmp += 127.0 / 48000.0;
-    if (tmp >= 1.0) {
-      tmp -= 1.0;
-    }
-    t.set(tmp);
-
-    double p = tmp * data.size();
-    int a = p;
-    int b = 1 + a;
-    if (b >= data.size())  //
-      b = 0;
-    p -= a;
-
-    for (int i = 0; i < N; i++) {
-      double frequency =
-          (1 - p) * data[a][i].frequency + p * data[b][i].frequency;
-      double magnitude =
-          (1 - p) * data[a][i].magnitude + p * data[b][i].magnitude;
-
-      sine[i].frequency(frequency);
-      sine[i].amplitude = magnitude;
-    }
-
     // XXX the code above changes frequency and amplitude immediately based on
     // the "current" value of t. this might lead to sudden jumps in frequency or
     // amplitude with might be audible. instead, we might smooth these jumps,
@@ -322,7 +298,31 @@ struct MyApp : App {
     // OnePole.
 
     while (io()) {
-      float i = io.in(0);  // left/mono channel input (if any);
+      // float i = io.in(0);  // left/mono channel input (if any);
+
+      double tmp = t.get();
+      tmp += 0.11 / 48000.0;
+      if (tmp >= 1.0) {
+        tmp -= 1.0;
+      }
+      t.set(tmp);
+
+      double p = tmp * data.size();
+      int a = p;
+      int b = 1 + a;
+      if (b >= data.size())  //
+        b = 0;
+      p -= a;
+
+      for (int i = 0; i < N; i++) {
+        double frequency =
+            (1 - p) * data[a][i].frequency + p * data[b][i].frequency;
+        double magnitude =
+            (1 - p) * data[a][i].magnitude + p * data[b][i].magnitude;
+
+        sine[i].frequency(frequency);
+        sine[i].amplitude = magnitude;
+      }
 
       // add the next sample from each of the N oscillators
       //
